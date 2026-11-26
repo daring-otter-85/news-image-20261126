@@ -12,8 +12,10 @@ machine, ``MAKEFUN_OUTPUT_DIR`` points the picture somewhere else
 instead of ``/output``, e.g. ``MAKEFUN_OUTPUT_DIR=out``.
 """
 
+import hashlib
 import os
 import shutil
+import struct
 import sys
 from pathlib import Path
 
@@ -26,6 +28,15 @@ def output_folder() -> Path:
     return Path(os.environ.get("MAKEFUN_OUTPUT_DIR", "/output"))
 
 
+def png_size(path: Path) -> tuple[int, int] | None:
+    """Width and height from the PNG IHDR header, or None if not a PNG."""
+    with path.open("rb") as fh:
+        head = fh.read(24)
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+        return None
+    return struct.unpack(">II", head[16:24])
+
+
 def deliver() -> int:
     if not SOURCE.is_file():
         print(f"no bundled picture at {SOURCE}", file=sys.stderr)
@@ -35,7 +46,16 @@ def deliver() -> int:
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / FILE_NAME
     shutil.copyfile(SOURCE, target)
-    print(f"delivered {target} ({target.stat().st_size} bytes)")
+
+    # Prove the delivery landed intact: same digest, readable PNG header.
+    src_hash = hashlib.sha256(SOURCE.read_bytes()).hexdigest()
+    out_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+    if src_hash != out_hash:
+        print(f"delivery mismatch: {target} differs from {SOURCE}", file=sys.stderr)
+        return 1
+    size = png_size(target)
+    dims = f"{size[0]}x{size[1]}" if size else "unknown size"
+    print(f"delivered {target} ({target.stat().st_size} bytes, {dims}, sha256 {out_hash[:12]}…)")
     return 0
 
 
